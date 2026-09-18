@@ -41,6 +41,11 @@ When Jev is unsure, the request goes to **standard**, never to **light**. A tier
 keeps the agent's own model, so you only name the tiers you want to change. With no tiers set
 the router only logs what it would have done.
 
+> **API models only.** The router works only for agents that OpenClaw runs itself against a
+> provider API, such as `anthropic/...` with an API key or `openai/...`. It does nothing for
+> agents on a CLI runtime such as Claude CLI (`claude-cli`), where the run is handed to an external
+> CLI. See [CLI runtimes](#cli-runtimes).
+
 More features are planned in [TODO.md](TODO.md). Each feature has its own `enabled` switch.
 
 ## What it sends to TypeSafe
@@ -65,7 +70,8 @@ agent's model.
 
 Prototype. The reply gate runs on a live gateway. The model router loads on a live gateway, and
 its questions were checked against the live Jev API with nine prompts, but it has not yet routed
-a real run. Unit tests cover the decision rules for both.
+a real run: the test gateway runs its agent on Claude CLI, which the router does not support (see
+[CLI runtimes](#cli-runtimes)). Unit tests cover the decision rules for both.
 
 ## Setup
 
@@ -186,6 +192,18 @@ slash, or a bare model id. If your agent already runs the expensive model, set `
 The router only looks at runs a person triggered. The host skips the hook when the model is
 locked (for example with `/model`) and catches hook errors, so a Jev failure or timeout leaves
 the agent's model in place.
+
+### CLI runtimes
+
+OpenClaw calls `before_model_resolve` only from its embedded runner, the path that talks to a
+provider API directly (checked against OpenClaw 2026.9.4). Runs on a CLI runtime such as Claude
+CLI never reach that hook, so the router is never asked and the agent keeps its configured model.
+The plugin still loads, reports `modelRouter on` and logs no error. The only sign is that no
+`jev-gate: route ...` lines appear for those runs.
+
+To check which path a run took, look at the gateway log: `agent/cli-backend cli exec:
+provider=claude-cli ...` means a CLI runtime, and the router did not run. The reply gate is not
+affected, because it uses `before_dispatch`, which runs for every inbound message.
 
 Each decision is one Jev call of roughly 250 to 650 ms. The default thresholds come from a
 nine-prompt check against the live API. Tune them on your own traffic.

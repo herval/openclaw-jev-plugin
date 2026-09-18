@@ -1,0 +1,93 @@
+{
+  "id": "jev-gate",
+  "name": "Jev Reply Gate",
+  "description": "Asks TypeSafe Jev whether the assistant should answer an incoming group message. Mentions always get an answer.",
+  "categories": ["other"],
+  "activation": {
+    "onStartup": true
+  },
+  "uiHints": {
+    "assistantName": {
+      "label": "Assistant name",
+      "help": "How people call the assistant in chat. Used for mention detection and passed to Jev."
+    },
+    "assistantDescription": {
+      "label": "Assistant description",
+      "help": "One or two sentences on what the assistant is for. Jev uses it to judge relevance."
+    },
+    "mentionPatterns": {
+      "label": "Mention patterns",
+      "help": "Extra names or /regex/i patterns that count as a mention. A mention always gets an answer."
+    },
+    "threshold": {
+      "label": "Reply threshold",
+      "help": "Reply when Jev's probability that an answer is wanted is at or above this value (0 to 1). Default 0.6."
+    },
+    "bufferSize": {
+      "label": "Context buffer size",
+      "help": "How many recent messages per conversation are sent to Jev as context. Default 8."
+    },
+    "evaluateDirectMessages": {
+      "label": "Evaluate direct messages",
+      "help": "Off by default: direct messages are always answered. Turn on to gate them too."
+    },
+    "failOpen": {
+      "label": "Reply when Jev is unreachable",
+      "help": "On by default: a Jev error lets the message through to the model. Off keeps the bot silent unless mentioned."
+    },
+    "apiKey": {
+      "label": "TypeSafe API key",
+      "help": "Prefer the TYPESAFE_API_KEY environment variable. This field is a fallback.",
+      "sensitive": true
+    },
+    "baseUrl": {
+      "label": "TypeSafe base URL",
+      "help": "Defaults to https://api.typesafe.ai."
+    },
+    "model": {
+      "label": "Jev model",
+      "help": "Defaults to jev-latest."
+    },
+    "timeoutMs": {
+      "label": "Jev timeout (ms)",
+      "help": "Per-request timeout. Default 2500."
+    }
+  },
+  "configGroups": [
+    {
+      "id": "assistant",
+      "title": "Assistant",
+      "order": 10,
+      "properties": ["assistantName", "assistantDescription", "mentionPatterns"]
+    },
+    {
+      "id": "decision",
+      "title": "Decision",
+      "order": 20,
+      "properties": ["threshold", "bufferSize", "evaluateDirectMessages", "failOpen"]
+    },
+    {
+      "id": "typesafe",
+      "title": "TypeSafe Jev",
+      "order": 30,
+      "properties": ["apiKey", "baseUrl", "model", "timeoutMs"]
+    }
+  ],
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "assistantName": { "type": "string" },
+      "assistantDescription": { "type": "string" },
+      "mentionPatterns": { "type": "array", "items": { "type": "string" } },
+      "threshold": { "type": "number", "minimum": 0, "maximum": 1 },
+      "bufferSize": { "type": "integer", "minimum": 1, "maximum": 50 },
+      "evaluateDirectMessages": { "type": "boolean" },
+      "failOpen": { "type": "boolean" },
+      "apiKey": { "type": "string" },
+      "baseUrl": { "type": "string" },
+      "model": { "type": "string" },
+      "timeoutMs": { "type": "integer", "minimum": 100 }
+    }
+  }
+}

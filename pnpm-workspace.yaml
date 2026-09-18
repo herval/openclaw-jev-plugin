@@ -1,0 +1,7 @@
+# Supply-chain hardening: refuse third-party versions newer than 7 days.
+# Requires pnpm >= 10.16; ignored on older pnpm.
+minimumReleaseAge: 10080
+# The openclaw host is a peer: the gateway supplies it at load time. Do not install it here.
+autoInstallPeers: false
+allowBuilds:
+  esbuild: false

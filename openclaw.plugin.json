@@ -1,7 +1,7 @@
 {
   "id": "jev-gate",
   "name": "Jev Reply Gate",
-  "description": "Asks TypeSafe Jev whether the assistant should answer an incoming group message. Mentions always get an answer.",
+  "description": "Uses TypeSafe Jev for fast typed judgments around the agent: whether to answer a group message, and which model tier a request needs. Each feature has its own switch.",
   "categories": ["other"],
   "activation": {
     "onStartup": true
@@ -15,25 +15,65 @@
       "label": "Assistant description",
       "help": "One or two sentences on what the assistant is for. Jev uses it to judge relevance."
     },
-    "mentionPatterns": {
-      "label": "Mention patterns",
-      "help": "Extra names or /regex/i patterns that count as a mention, on top of OpenClaw's own mention patterns. A mention always gets an answer."
+    "bufferSize": {
+      "label": "Context buffer size",
+      "help": "How many recent messages per conversation are kept as context for Jev. Shared by every feature. Default 8."
     },
-    "threshold": {
+    "replyGate.enabled": {
+      "label": "Reply gate",
+      "help": "On by default. Asks Jev whether the assistant should answer each group message. Mentions always get an answer."
+    },
+    "replyGate.threshold": {
       "label": "Reply threshold",
       "help": "Reply when Jev's probability that an answer is wanted is at or above this value (0 to 1). Default 0.6."
     },
-    "bufferSize": {
-      "label": "Context buffer size",
-      "help": "How many recent messages per conversation are sent to Jev as context. Default 8."
+    "replyGate.mentionPatterns": {
+      "label": "Mention patterns",
+      "help": "Extra names or /regex/i patterns that count as a mention, on top of OpenClaw's own mention patterns. A mention always gets an answer."
     },
-    "evaluateDirectMessages": {
+    "replyGate.evaluateDirectMessages": {
       "label": "Evaluate direct messages",
       "help": "Off by default: direct messages are always answered. Turn on to gate them too."
     },
-    "failOpen": {
+    "replyGate.failOpen": {
       "label": "Reply when Jev is unreachable",
       "help": "On by default: a Jev error lets the message through to the model. Off keeps the bot silent unless mentioned."
+    },
+    "modelRouter.enabled": {
+      "label": "Model router",
+      "help": "Off by default. Asks Jev how much work a request takes and what is at stake, then picks a model tier for that run."
+    },
+    "modelRouter.tiers.light": {
+      "label": "Light model",
+      "help": "provider/model for small talk and simple lookups, e.g. anthropic/claude-haiku-4-5. Empty keeps the agent's model."
+    },
+    "modelRouter.tiers.standard": {
+      "label": "Standard model",
+      "help": "provider/model for everyday requests and every uncertain case. Empty keeps the agent's model."
+    },
+    "modelRouter.tiers.heavy": {
+      "label": "Heavy model",
+      "help": "provider/model for hard or high-stakes requests. Empty keeps the agent's model."
+    },
+    "modelRouter.lightBelow": {
+      "label": "Light below",
+      "help": "Effort (0 to 1) at or below this can take the light tier. Default 0.34.",
+      "advanced": true
+    },
+    "modelRouter.heavyAbove": {
+      "label": "Heavy above",
+      "help": "Effort (0 to 1) at or above this takes the heavy tier. Default 0.8.",
+      "advanced": true
+    },
+    "modelRouter.minConfidence": {
+      "label": "Minimum confidence for light",
+      "help": "Below this confidence in the effort score, a request never takes the light tier. Default 0.5.",
+      "advanced": true
+    },
+    "modelRouter.maxPromptChars": {
+      "label": "Prompt characters sent to Jev",
+      "help": "Counted from the end of the prompt, where the current message sits. Default 4000.",
+      "advanced": true
     },
     "apiKey": {
       "label": "TypeSafe API key",
@@ -58,24 +98,35 @@
       "id": "assistant",
       "title": "Assistant",
       "order": 10,
-      "properties": ["assistantName", "assistantDescription", "mentionPatterns"]
+      "properties": ["assistantName", "assistantDescription", "bufferSize"]
     },
     {
-      "id": "decision",
-      "title": "Decision",
+      "id": "replyGate",
+      "title": "Reply gate",
       "order": 20,
-      "properties": ["threshold", "bufferSize", "evaluateDirectMessages", "failOpen"]
+      "properties": ["replyGate"]
+    },
+    {
+      "id": "modelRouter",
+      "title": "Model router",
+      "order": 30,
+      "properties": ["modelRouter"]
     },
     {
       "id": "typesafe",
       "title": "TypeSafe Jev",
-      "order": 30,
+      "order": 40,
       "properties": ["apiKey", "baseUrl", "model", "timeoutMs"]
     }
   ],
   "configContracts": {
     "secretInputs": {
-      "paths": [{ "path": "apiKey", "expected": "string" }]
+      "paths": [
+        {
+          "path": "apiKey",
+          "expected": "string"
+        }
+      ]
     }
   },
   "configSchema": {
@@ -96,11 +147,38 @@
     "properties": {
       "assistantName": { "type": "string" },
       "assistantDescription": { "type": "string" },
-      "mentionPatterns": { "type": "array", "items": { "type": "string" } },
-      "threshold": { "type": "number", "minimum": 0, "maximum": 1 },
       "bufferSize": { "type": "integer", "minimum": 1, "maximum": 50 },
-      "evaluateDirectMessages": { "type": "boolean" },
-      "failOpen": { "type": "boolean" },
+      "replyGate": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "threshold": { "type": "number", "minimum": 0, "maximum": 1 },
+          "mentionPatterns": { "type": "array", "items": { "type": "string" } },
+          "evaluateDirectMessages": { "type": "boolean" },
+          "failOpen": { "type": "boolean" }
+        }
+      },
+      "modelRouter": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "enabled": { "type": "boolean" },
+          "tiers": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "light": { "type": "string" },
+              "standard": { "type": "string" },
+              "heavy": { "type": "string" }
+            }
+          },
+          "lightBelow": { "type": "number", "minimum": 0, "maximum": 1 },
+          "heavyAbove": { "type": "number", "minimum": 0, "maximum": 1 },
+          "minConfidence": { "type": "number", "minimum": 0, "maximum": 1 },
+          "maxPromptChars": { "type": "integer", "minimum": 200, "maximum": 20000 }
+        }
+      },
       "apiKey": { "anyOf": [{ "type": "string" }, { "$ref": "#/$defs/secretRef" }] },
       "baseUrl": { "type": "string" },
       "model": { "type": "string" },

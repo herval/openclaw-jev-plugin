@@ -47,7 +47,7 @@ export function defaultAgentId(cfg: OpenClawConfig | undefined): string {
 
 export function createAssistantResolver(
   api: Pick<OpenClawPluginApi, "config" | "runtime">,
-  settings: Pick<JevGateSettings, "assistantName" | "mentionPatterns">,
+  settings: Pick<JevGateSettings, "assistantName"> & { mentionPatterns: readonly string[] },
 ): AssistantResolver {
   const extra = createMentionMatcher([
     ...(settings.assistantName ? [settings.assistantName] : []),

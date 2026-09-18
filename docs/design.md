@@ -62,6 +62,40 @@ to the default agent. Resolution runs per message because one gateway can host s
 with different names. `assistantName` and `mentionPatterns` in the plugin config are optional
 overrides on top of the host values.
 
+## Feature switches and the model router
+
+The plugin started as one feature. It now holds several Jev judgments around the agent, so the
+config has one block per feature, each with `enabled`: `replyGate` (on by default, which keeps
+the original behaviour) and `modelRouter` (off by default). Top-level keys are the ones every
+feature shares: the assistant's name and description, `bufferSize`, and the TypeSafe connection.
+The flat `threshold`, `mentionPatterns`, `evaluateDirectMessages` and `failOpen` keys moved
+under `replyGate` with no compatibility shim; the plugin was unpublished when this changed.
+
+`before_dispatch` and `message_sent` feed the conversation buffer whenever any feature is on,
+so the router has conversation context even with the gate off. With every feature off the plugin
+registers no hooks.
+
+The model router uses `before_model_resolve`, which returns `providerOverride` and
+`modelOverride` as separate fields. Jev answers two independent questions over one state: an
+`effort` Score with four levels and a `highStakes` Noul. Code maps them to a light, standard or
+heavy tier. Uncertainty goes to standard: a request only takes the light tier when Jev's
+confidence in the effort score clears `minConfidence`. A tier with no model configured returns no
+override, so the agent's own model stays in place.
+
+Decisions made while building it:
+
+- Two questions, not three. An intent Choice (chit-chat, lookup, coding, analysis) was dropped
+  because no rule consumed it, and every question costs tokens.
+- `heavyAbove` defaults to 0.8, not 0.67. With four levels, level 2 ("a task with a few steps")
+  normalizes to exactly 0.667. A live check sent ordinary mid-sized tasks to the heavy tier at
+  0.67. Fake-Jev unit tests could not have caught this.
+- Only `user`-triggered runs are routed. Cron, heartbeat, memory and overflow runs carry the
+  host's own prompts, which the questions are not written for.
+- No default model names. A wrong id for a provider the user lacks would break runs, and with
+  no tiers set the router becomes a log-only dry run.
+- The router has no `failOpen`. On a Jev error the only sensible outcome is the agent's model.
+  The host also wraps the hook in a try/catch and skips it when the model selection is locked.
+
 ## Files Modified
 
 - `index.ts` — plugin entry through `definePluginEntry`.
@@ -69,6 +103,7 @@ overrides on top of the host values.
 - `package.json` — package metadata, `openclaw` peer, scripts.
 - `src/plugin.ts` — hook wiring and decision order.
 - `src/decide.ts` — Jev state, the three questions, the threshold rule.
+- `src/route.ts` — model router: Jev state, the two questions, the tier rule.
 - `src/buffer.ts` — per-conversation ring buffer with LRU eviction.
 - `src/identity.ts` — agent id, name and mention resolution from the host config and runtime.
 - `src/mention.ts` — extra mention patterns from the plugin config.

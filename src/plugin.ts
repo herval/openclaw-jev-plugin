@@ -1,7 +1,16 @@
 /**
- * Hook wiring. `before_dispatch` is a claim hook: returning `{ handled: true }`
+ * Hook wiring. Each feature has an `enabled` switch in its own settings block.
+ *
+ * Reply gate: `before_dispatch` is a claim hook. Returning `{ handled: true }`
  * without text ends the message before the model runs, which is how the gate
  * keeps the bot silent. Returning nothing lets ordinary dispatch continue.
+ *
+ * Model router: `before_model_resolve` can override the provider and model for
+ * one run. The host skips the hook when the model selection is locked and
+ * catches anything the hook throws, so a routing failure never blocks a run.
+ *
+ * Both features read the same conversation buffer, which `before_dispatch` and
+ * `message_sent` feed whether or not the gate is on.
  */
 import type {
   OpenClawPluginApi,
@@ -13,6 +22,7 @@ import { resolveSettings, type JevGateSettings } from "./config.js";
 import { decideWithJev } from "./decide.js";
 import { createAssistantResolver } from "./identity.js";
 import { createJevClient, type JevClient } from "./jev-client.js";
+import { routeWithJev, toModelOverride } from "./route.js";
 
 export type JevGateDependencies = {
   jev?: JevClient;
@@ -42,9 +52,19 @@ export function conversationKey(
 export function registerJevGate(api: OpenClawPluginApi, deps: JevGateDependencies = {}): JevGateHandle {
   const settings = deps.settings ?? resolveSettings(api.pluginConfig);
   const now = deps.now ?? (() => Date.now());
+  const gate = settings.replyGate;
+  const router = settings.modelRouter;
   const buffer = createConversationBuffer({ size: settings.bufferSize });
-  const assistants = createAssistantResolver(api, settings);
+  const assistants = createAssistantResolver(api, {
+    assistantName: settings.assistantName,
+    mentionPatterns: gate.mentionPatterns,
+  });
   const log = api.logger;
+
+  if (!gate.enabled && !router.enabled) {
+    log.info("jev-gate: every feature is disabled; no hooks registered");
+    return { settings, buffer };
+  }
 
   if (settings.unresolvedApiKeyRef) {
     const { source, provider } = settings.unresolvedApiKeyRef;
@@ -64,12 +84,17 @@ export function registerJevGate(api: OpenClawPluginApi, deps: JevGateDependencie
         timeoutMs: settings.timeoutMs,
       });
     } else {
+      const effects = [
+        ...(gate.enabled ? [gate.failOpen ? "every message will be answered" : "only mentions will be answered"] : []),
+        ...(router.enabled ? ["the model router is inactive"] : []),
+      ];
       log.warn(
         "jev-gate: no TypeSafe API key (set TYPESAFE_API_KEY or plugins.entries.jev-gate.config.apiKey, a string or SecretRef); " +
-          (settings.failOpen ? "every message will be answered" : "only mentions will be answered"),
+          effects.join("; "),
       );
     }
   }
+  log.info(`jev-gate: replyGate ${gate.enabled ? "on" : "off"}, modelRouter ${router.enabled ? "on" : "off"}`);
 
   api.on("before_dispatch", async (event, ctx) => {
     const key = conversationKey(event, ctx);
@@ -82,7 +107,11 @@ export function registerJevGate(api: OpenClawPluginApi, deps: JevGateDependencie
       timestamp,
     });
 
-    if (!event.isGroup && !settings.evaluateDirectMessages) {
+    if (!gate.enabled) {
+      return undefined;
+    }
+
+    if (!event.isGroup && !gate.evaluateDirectMessages) {
       buffer.markLast(key, "replied");
       return undefined;
     }
@@ -98,8 +127,8 @@ export function registerJevGate(api: OpenClawPluginApi, deps: JevGateDependencie
     }
 
     if (!jev) {
-      buffer.markLast(key, settings.failOpen ? "replied" : "stayed_silent");
-      return settings.failOpen ? undefined : SILENT;
+      buffer.markLast(key, gate.failOpen ? "replied" : "stayed_silent");
+      return gate.failOpen ? undefined : SILENT;
     }
 
     try {
@@ -113,16 +142,16 @@ export function registerJevGate(api: OpenClawPluginApi, deps: JevGateDependencie
           recent: buffer.recent(key),
           now: now(),
         },
-        settings.threshold,
+        gate.threshold,
       );
       buffer.markLast(key, decision.reply ? "replied" : "stayed_silent");
       log.info(`jev-gate: ${decision.reply ? "reply" : "silent"} for ${key} (${decision.reason})`);
       return decision.reply ? undefined : SILENT;
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
-      log.warn(`jev-gate: Jev call failed for ${key}, ${settings.failOpen ? "replying" : "staying silent"}: ${message}`);
-      buffer.markLast(key, settings.failOpen ? "replied" : "stayed_silent");
-      return settings.failOpen ? undefined : SILENT;
+      log.warn(`jev-gate: Jev call failed for ${key}, ${gate.failOpen ? "replying" : "staying silent"}: ${message}`);
+      buffer.markLast(key, gate.failOpen ? "replied" : "stayed_silent");
+      return gate.failOpen ? undefined : SILENT;
     }
   });
 
@@ -141,6 +170,47 @@ export function registerJevGate(api: OpenClawPluginApi, deps: JevGateDependencie
       timestamp: now(),
     });
   });
+
+  if (router.enabled) {
+    const { light, standard, heavy } = router.tiers;
+    if (!light && !standard && !heavy) {
+      log.info("jev-gate: modelRouter has no tiers configured; decisions are logged and the model is never changed");
+    }
+
+    api.on("before_model_resolve", async (event, ctx) => {
+      // Cron, heartbeat, memory and overflow runs carry the host's own prompts, not a person's request.
+      if (!jev || (ctx.trigger !== undefined && ctx.trigger !== "user")) {
+        return undefined;
+      }
+      const key = ctx.sessionKey;
+      const label = key ?? ctx.runId ?? "run";
+      const recent = key ? buffer.recent(key) : [];
+      // The newest buffered user message is the one already in the prompt.
+      const earlier = recent.at(-1)?.role === "user" ? recent.slice(0, -1) : recent;
+      try {
+        const decision = await routeWithJev(
+          jev,
+          {
+            assistantName: assistants.resolve(key).name,
+            assistantDescription: settings.assistantDescription,
+            channel: ctx.channelId ?? ctx.channel,
+            prompt: event.prompt,
+            attachmentKinds: (event.attachments ?? []).map((attachment) => attachment.kind),
+            recent: earlier,
+            now: now(),
+          },
+          router,
+        );
+        const target = router.tiers[decision.tier];
+        log.info(`jev-gate: route ${decision.tier} -> ${target ?? "agent default"} for ${label} (${decision.reason})`);
+        return toModelOverride(target);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        log.warn(`jev-gate: Jev call failed for ${label}, keeping the agent's model: ${message}`);
+        return undefined;
+      }
+    });
+  }
 
   return { settings, buffer };
 }

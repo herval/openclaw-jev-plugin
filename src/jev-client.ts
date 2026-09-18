@@ -21,7 +21,14 @@ export type ChoiceQuestion<T extends Record<string, EntryType> = Record<string, 
   criteria: T;
 };
 
-export type Question = NoulQuestion | ChoiceQuestion;
+/** Ordered levels, low to high. 2 to 10 entries; each must describe a situation that stands on its own. */
+export type ScoreQuestion = {
+  type: "score";
+  instructions?: EntryType;
+  criteria: readonly EntryType[];
+};
+
+export type Question = NoulQuestion | ChoiceQuestion | ScoreQuestion;
 export type Questions = Record<string, Question>;
 
 export type NoulResponse = { type: "noul"; noul: number };
@@ -32,11 +39,22 @@ export type ChoiceResponse<T extends Record<string, EntryType> = Record<string, 
   probabilities: { [label in keyof T]: number };
 };
 
+export type ScoreResponse = {
+  type: "score";
+  /** Probability-weighted level, from 0 to the highest level index. */
+  score: number;
+  confidence: number;
+  /** Probability per level, keyed by the level index as a string. */
+  probabilities: Record<string, number>;
+};
+
 export type ResultFor<Q extends Question> = Q extends NoulQuestion
   ? NoulResponse
-  : Q extends ChoiceQuestion<infer T>
-    ? ChoiceResponse<T>
-    : never;
+  : Q extends ScoreQuestion
+    ? ScoreResponse
+    : Q extends ChoiceQuestion<infer T>
+      ? ChoiceResponse<T>
+      : never;
 
 export type SystemOneResult<Q extends Questions> = {
   model: string;
@@ -54,6 +72,12 @@ export const choice = <const T extends Record<string, EntryType>>(
   instructions: EntryType,
   criteria: T,
 ): ChoiceQuestion<T> => ({ type: "choice", instructions, criteria });
+
+export const score = (instructions: EntryType, criteria: readonly EntryType[]): ScoreQuestion => ({
+  type: "score",
+  instructions,
+  criteria,
+});
 
 export type Fetch = (input: string, init?: RequestInit) => Promise<Response>;
 

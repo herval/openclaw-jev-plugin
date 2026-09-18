@@ -16,24 +16,57 @@ describe("resolveSettings", () => {
     const settings = resolveSettings(
       {
         assistantName: "Pato",
-        mentionPatterns: ["duck", 3, " "],
-        threshold: 1.7,
         bufferSize: 0.2,
         timeoutMs: 10,
         apiKey: "cfg",
-        failOpen: false,
-        evaluateDirectMessages: true,
+        replyGate: {
+          mentionPatterns: ["duck", 3, " "],
+          threshold: 1.7,
+          failOpen: false,
+          evaluateDirectMessages: true,
+        },
       },
       { TYPESAFE_API_KEY: "env" },
     );
     expect(settings.assistantName).toBe("Pato");
-    expect(settings.mentionPatterns).toEqual(["duck"]);
-    expect(settings.threshold).toBe(1);
     expect(settings.bufferSize).toBe(1);
     expect(settings.timeoutMs).toBe(100);
     expect(settings.apiKey).toBe("cfg");
-    expect(settings.failOpen).toBe(false);
-    expect(settings.evaluateDirectMessages).toBe(true);
+    expect(settings.replyGate).toEqual({
+      enabled: true,
+      mentionPatterns: ["duck"],
+      threshold: 1,
+      failOpen: false,
+      evaluateDirectMessages: true,
+    });
+  });
+
+  it("turns each feature on and off from its own block", () => {
+    expect(resolveSettings({}, {}).replyGate.enabled).toBe(true);
+    expect(resolveSettings({}, {}).modelRouter.enabled).toBe(false);
+
+    const settings = resolveSettings(
+      {
+        replyGate: { enabled: false },
+        modelRouter: {
+          enabled: true,
+          tiers: { light: " anthropic/claude-haiku-4-5 ", standard: "", heavy: 7 },
+          lightBelow: -1,
+          maxPromptChars: 10,
+        },
+      },
+      {},
+    );
+    expect(settings.replyGate.enabled).toBe(false);
+    expect(settings.modelRouter).toEqual({
+      ...DEFAULT_SETTINGS.modelRouter,
+      enabled: true,
+      tiers: { light: "anthropic/claude-haiku-4-5", standard: undefined, heavy: undefined },
+      lightBelow: 0,
+      maxPromptChars: 200,
+    });
+    // A block that is not an object is ignored, not fatal.
+    expect(resolveSettings({ modelRouter: "yes" }, {}).modelRouter).toEqual(DEFAULT_SETTINGS.modelRouter);
   });
 
   it("uses an apiKey the host resolved from a SecretRef", () => {

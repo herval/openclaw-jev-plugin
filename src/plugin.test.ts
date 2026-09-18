@@ -4,10 +4,16 @@ import type {
   OpenClawPluginApi,
   PluginHookBeforeDispatchContext,
   PluginHookBeforeDispatchEvent,
+  PluginHookAgentContext,
   PluginHookHandlerMap,
   PluginRuntime,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { DEFAULT_SETTINGS, type JevGateSettings } from "./config.js";
+import {
+  DEFAULT_SETTINGS,
+  type JevGateSettings,
+  type ModelRouterSettings,
+  type ReplyGateSettings,
+} from "./config.js";
 import type { JevClient } from "./jev-client.js";
 import { conversationKey, registerJevGate } from "./plugin.js";
 
@@ -62,8 +68,20 @@ function fakeApi(config: Record<string, unknown> = {}, hostConfig: OpenClawConfi
   return { api, handlers, logs };
 }
 
-function settings(overrides: Partial<JevGateSettings> = {}): JevGateSettings {
-  return { ...DEFAULT_SETTINGS, apiKey: "k", ...overrides };
+type SettingsOverrides = Partial<Omit<JevGateSettings, "replyGate" | "modelRouter">> & {
+  replyGate?: Partial<ReplyGateSettings>;
+  modelRouter?: Partial<ModelRouterSettings>;
+};
+
+function settings(overrides: SettingsOverrides = {}): JevGateSettings {
+  const { replyGate, modelRouter, ...shared } = overrides;
+  return {
+    ...DEFAULT_SETTINGS,
+    apiKey: "k",
+    ...shared,
+    replyGate: { ...DEFAULT_SETTINGS.replyGate, ...replyGate },
+    modelRouter: { ...DEFAULT_SETTINGS.modelRouter, ...modelRouter },
+  };
 }
 
 function jevAnswering(wanted: number, addressed = 0): JevClient & { calls: number; states: unknown[] } {
@@ -84,6 +102,43 @@ function jevAnswering(wanted: number, addressed = 0): JevClient & { calls: numbe
     },
   };
   return client;
+}
+
+/** Answers the router's questions. `effort` is a level from 0 to 3, as Jev reports it. */
+function jevRouting(effort: number, highStakes = 0, confidence = 0.9): JevClient & { calls: number; states: unknown[] } {
+  const client = {
+    calls: 0,
+    states: [] as unknown[],
+    async systemOne(state: unknown) {
+      client.calls += 1;
+      client.states.push(state);
+      return {
+        model: "jev-test",
+        answers: {
+          effort: { type: "score", score: effort, confidence, probabilities: {} },
+          highStakes: { type: "noul", noul: highStakes },
+        },
+      } as never;
+    },
+  };
+  return client;
+}
+
+const TIERS = { light: "anthropic/claude-haiku-4-5", standard: undefined, heavy: "anthropic/claude-opus-5" };
+
+const runCtx: PluginHookAgentContext = {
+  runId: "r1",
+  sessionKey: "agent:main:slack:group:g1",
+  channelId: "slack",
+  trigger: "user",
+};
+
+async function resolveModel(handlers: Handlers, prompt: string, over: Partial<PluginHookAgentContext> = {}) {
+  const handler = handlers.before_model_resolve;
+  if (!handler) {
+    throw new Error("before_model_resolve not registered");
+  }
+  return await handler({ prompt }, { ...runCtx, ...over });
 }
 
 function jevFailing(): JevClient & { calls: number } {
@@ -178,7 +233,7 @@ describe("registerJevGate", () => {
     const { api, handlers } = fakeApi();
     const jev = jevAnswering(0);
     registerJevGate(api, {
-      settings: settings({ assistantName: "Quack", mentionPatterns: ["/\\bduck\\b/"] }),
+      settings: settings({ assistantName: "Quack", replyGate: { mentionPatterns: ["/\\bduck\\b/"] } }),
       jev,
     });
     expect(await dispatch(handlers, groupEvent("quack, you there?"))).toBeUndefined();
@@ -197,20 +252,20 @@ describe("registerJevGate", () => {
     expect(jev.calls).toBe(0);
 
     const gated = fakeApi();
-    registerJevGate(gated.api, { settings: settings({ evaluateDirectMessages: true }), jev });
+    registerJevGate(gated.api, { settings: settings({ replyGate: { evaluateDirectMessages: true } }), jev });
     expect(await dispatch(gated.handlers, groupEvent("hello", { isGroup: false }))).toEqual({ handled: true });
     expect(jev.calls).toBe(1);
   });
 
   it("silences a group message Jev rates below the threshold and replies above it", async () => {
     const { api, handlers, logs } = fakeApi();
-    const handle = registerJevGate(api, { settings: settings({ threshold: 0.6 }), jev: jevAnswering(0.3) });
+    const handle = registerJevGate(api, { settings: settings({ replyGate: { threshold: 0.6 } }), jev: jevAnswering(0.3) });
     expect(await dispatch(handlers, groupEvent("lunch anyone?"))).toEqual({ handled: true });
     expect(handle.buffer.recent(ctx.sessionKey!)[0]?.assistantAction).toBe("stayed_silent");
     expect(logs.some((l) => l.startsWith("info jev-gate: silent"))).toBe(true);
 
     const replying = fakeApi();
-    registerJevGate(replying.api, { settings: settings({ threshold: 0.6 }), jev: jevAnswering(0.9) });
+    registerJevGate(replying.api, { settings: settings({ replyGate: { threshold: 0.6 } }), jev: jevAnswering(0.9) });
     expect(await dispatch(replying.handlers, groupEvent("can someone find the report?"))).toBeUndefined();
   });
 
@@ -241,14 +296,14 @@ describe("registerJevGate", () => {
     expect(open.logs.some((l) => l.startsWith("warn jev-gate: Jev call failed"))).toBe(true);
 
     const closed = fakeApi();
-    registerJevGate(closed.api, { settings: settings({ failOpen: false }), jev: jevFailing() });
+    registerJevGate(closed.api, { settings: settings({ replyGate: { failOpen: false } }), jev: jevFailing() });
     expect(await dispatch(closed.handlers, groupEvent("hm"))).toEqual({ handled: true });
     expect(await dispatch(closed.handlers, groupEvent("pato?"))).toBeUndefined();
   });
 
   it("warns and applies the failure policy when no API key is configured", async () => {
     const { api, handlers, logs } = fakeApi();
-    registerJevGate(api, { settings: settings({ apiKey: undefined, failOpen: false }) });
+    registerJevGate(api, { settings: settings({ apiKey: undefined, replyGate: { failOpen: false } }) });
     expect(logs[0]).toMatch(/no TypeSafe API key/);
     expect(await dispatch(handlers, groupEvent("hi all"))).toEqual({ handled: true });
   });
@@ -260,6 +315,79 @@ describe("registerJevGate", () => {
     });
     expect(logs[0]).toMatch(/SecretRef \(source=store, provider=default\) did not resolve/);
     expect(logs[1]).toMatch(/no TypeSafe API key/);
+  });
+
+  it("registers no router hook unless the router is enabled", () => {
+    const { api, handlers } = fakeApi();
+    registerJevGate(api, { settings: settings(), jev: jevAnswering(0) });
+    expect(handlers.before_model_resolve).toBeUndefined();
+  });
+
+  it("registers nothing when every feature is disabled", () => {
+    const { api, handlers, logs } = fakeApi();
+    registerJevGate(api, { settings: settings({ replyGate: { enabled: false } }), jev: jevAnswering(0) });
+    expect(handlers).toEqual({});
+    expect(logs).toEqual(["info jev-gate: every feature is disabled; no hooks registered"]);
+  });
+
+  it("routes a run to the tier Jev's effort and stakes point at", async () => {
+    const route = async (jev: JevClient) => {
+      const { api, handlers } = fakeApi();
+      registerJevGate(api, { settings: settings({ modelRouter: { enabled: true, tiers: TIERS } }), jev });
+      return await resolveModel(handlers, "hi");
+    };
+    expect(await route(jevRouting(0.2))).toEqual({ providerOverride: "anthropic", modelOverride: "claude-haiku-4-5" });
+    expect(await route(jevRouting(2.8))).toEqual({ providerOverride: "anthropic", modelOverride: "claude-opus-5" });
+    // Standard has no model configured, so the agent keeps its own.
+    expect(await route(jevRouting(1.5))).toBeUndefined();
+    // Low effort, but Jev is unsure or the stakes are high: never the light tier.
+    expect(await route(jevRouting(0.2, 0, 0.3))).toBeUndefined();
+    expect(await route(jevRouting(0.2, 0.9))).toBeUndefined();
+    expect(await route(jevRouting(1.5, 0.9))).toEqual({ providerOverride: "anthropic", modelOverride: "claude-opus-5" });
+  });
+
+  it("routes only user-triggered runs and keeps the agent's model when Jev fails", async () => {
+    const { api, handlers, logs } = fakeApi();
+    const jev = jevRouting(0.2);
+    registerJevGate(api, { settings: settings({ modelRouter: { enabled: true, tiers: TIERS } }), jev });
+    expect(await resolveModel(handlers, "tick", { trigger: "heartbeat" })).toBeUndefined();
+    expect(jev.calls).toBe(0);
+    expect(await resolveModel(handlers, "hi", { trigger: undefined })).toBeDefined();
+
+    const failing = fakeApi();
+    registerJevGate(failing.api, {
+      settings: settings({ modelRouter: { enabled: true, tiers: TIERS } }),
+      jev: jevFailing(),
+    });
+    expect(await resolveModel(failing.handlers, "hi")).toBeUndefined();
+    expect(failing.logs.some((l) => l.includes("keeping the agent's model"))).toBe(true);
+    expect(logs.some((l) => l === "info jev-gate: replyGate on, modelRouter on")).toBe(true);
+  });
+
+  it("runs the router with the gate off, still feeding it the conversation", async () => {
+    const { api, handlers, logs } = fakeApi();
+    const jev = jevRouting(0.2);
+    registerJevGate(api, {
+      settings: settings({ replyGate: { enabled: false }, modelRouter: { enabled: true } }),
+      jev,
+      now: () => 9_000,
+    });
+    expect(logs).toContain("info jev-gate: modelRouter has no tiers configured; decisions are logged and the model is never changed");
+
+    // The gate is off: nothing is silenced and Jev is not asked about the message.
+    expect(await dispatch(handlers, groupEvent("anyone seen the deploy?"))).toBeUndefined();
+    handlers.message_sent?.({ to: "g1", content: "it is green", success: true, sessionKey: ctx.sessionKey }, {});
+    expect(await dispatch(handlers, groupEvent("thanks"))).toBeUndefined();
+    expect(jev.calls).toBe(0);
+
+    expect(await resolveModel(handlers, "[Slack] ana: thanks")).toBeUndefined();
+    expect(jev.states[0]).toMatchObject({
+      assistant: { name: "Pato" },
+      request: "[Slack] ana: thanks",
+      // The newest message is already in the prompt, so it is not repeated here.
+      conversation: { recentMessages: [{ text: "anyone seen the deploy?" }, { from: "assistant", text: "it is green" }] },
+    });
+    expect(logs.some((l) => l.startsWith("info jev-gate: route light -> agent default"))).toBe(true);
   });
 
   it("builds a conversation key from the session, then the conversation, then channel and sender", () => {

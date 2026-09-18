@@ -70,6 +70,34 @@ declare module "openclaw/plugin-sdk/plugin-entry" {
     runId?: string;
   };
 
+  export type PluginHookBeforeModelResolveEvent = {
+    prompt: string;
+    attachments?: Array<{
+      kind: "image" | "video" | "audio" | "document" | "other";
+      mimeType?: string;
+    }>;
+  };
+
+  /** Provider and model are separate: `anthropic` and `claude-haiku-4-5`, not one joined string. */
+  export type PluginHookBeforeModelResolveResult = {
+    modelOverride?: string;
+    providerOverride?: string;
+  };
+
+  /** Subset of the host's agent-run context. */
+  export type PluginHookAgentContext = {
+    runId?: string;
+    agentId?: string;
+    sessionKey?: string;
+    modelProviderId?: string;
+    modelId?: string;
+    channel?: string;
+    channelId?: string;
+    senderId?: string;
+    /** `user`, `cron`, `heartbeat`, `memory` or `overflow`. */
+    trigger?: string;
+  };
+
   export type PluginHookHandlerMap = {
     before_dispatch: (
       event: PluginHookBeforeDispatchEvent,
@@ -79,6 +107,13 @@ declare module "openclaw/plugin-sdk/plugin-entry" {
       event: PluginHookMessageSentEvent,
       ctx: PluginHookMessageContext,
     ) => Promise<void> | void;
+    before_model_resolve: (
+      event: PluginHookBeforeModelResolveEvent,
+      ctx: PluginHookAgentContext,
+    ) =>
+      | Promise<PluginHookBeforeModelResolveResult | void>
+      | PluginHookBeforeModelResolveResult
+      | void;
   };
 
   export type PluginHookName = keyof PluginHookHandlerMap;

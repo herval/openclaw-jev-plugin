@@ -56,8 +56,19 @@ Then in `openclaw.json`:
 }
 ```
 
-Export `TYPESAFE_API_KEY` in the gateway environment. The plugin reads it, then falls back to
-`config.apiKey`.
+Store the TypeSafe key in OpenClaw's secret store and point `config.apiKey` at it with a
+SecretRef. The gateway resolves the ref before the plugin loads, so the key never sits in
+`openclaw.json` and does not depend on the gateway's shell environment (launchd does not read
+`~/.zshrc`):
+
+```bash
+openclaw config set plugins.entries.jev-gate.config.apiKey \
+  '{"source":"store","provider":"default","id":"TYPESAFE_API_KEY"}' --json
+```
+
+`config.apiKey` also accepts a plain string. With no `config.apiKey`, or a SecretRef that fails
+to resolve, the plugin falls back to `TYPESAFE_API_KEY` in the gateway environment. A failed ref
+logs a warning with its source and provider, never the value.
 
 The gate only matters for group channels where OpenClaw delivers every message. Keep the
 channel's `requireMention: false` for the groups you want gated. Channels that already run
@@ -91,7 +102,7 @@ to repeat in the plugin config.
 | `bufferSize` | `8` | Messages kept per conversation. |
 | `evaluateDirectMessages` | `false` | Gate direct messages too. |
 | `failOpen` | `true` | On a Jev error or a missing key, reply (true) or stay silent (false). |
-| `apiKey` | env `TYPESAFE_API_KEY` | TypeSafe API key. |
+| `apiKey` | env `TYPESAFE_API_KEY` | TypeSafe API key: a SecretRef or a plain string. |
 | `baseUrl` | `https://api.typesafe.ai` | TypeSafe API root. |
 | `model` | `jev-latest` | Jev model. |
 | `timeoutMs` | `2500` | Per-request timeout. |

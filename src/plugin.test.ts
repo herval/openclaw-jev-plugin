@@ -253,6 +253,15 @@ describe("registerJevGate", () => {
     expect(await dispatch(handlers, groupEvent("hi all"))).toEqual({ handled: true });
   });
 
+  it("warns when the apiKey SecretRef did not resolve", () => {
+    const { api, logs } = fakeApi();
+    registerJevGate(api, {
+      settings: settings({ apiKey: undefined, unresolvedApiKeyRef: { source: "store", provider: "default" } }),
+    });
+    expect(logs[0]).toMatch(/SecretRef \(source=store, provider=default\) did not resolve/);
+    expect(logs[1]).toMatch(/no TypeSafe API key/);
+  });
+
   it("builds a conversation key from the session, then the conversation, then channel and sender", () => {
     expect(conversationKey(groupEvent("x"), ctx)).toBe("agent:main:slack:group:g1");
     expect(conversationKey(groupEvent("x", { sessionKey: undefined }), { ...ctx, sessionKey: undefined })).toBe("g1");

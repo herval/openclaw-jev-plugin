@@ -37,7 +37,7 @@
     },
     "apiKey": {
       "label": "TypeSafe API key",
-      "help": "Prefer the TYPESAFE_API_KEY environment variable. This field is a fallback.",
+      "help": "A SecretRef such as {\"source\":\"store\",\"provider\":\"default\",\"id\":\"TYPESAFE_API_KEY\"}, or a plain string. Falls back to the TYPESAFE_API_KEY environment variable.",
       "sensitive": true
     },
     "baseUrl": {
@@ -73,9 +73,26 @@
       "properties": ["apiKey", "baseUrl", "model", "timeoutMs"]
     }
   ],
+  "configContracts": {
+    "secretInputs": {
+      "paths": [{ "path": "apiKey", "expected": "string" }]
+    }
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
+    "$defs": {
+      "secretRef": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "source": { "type": "string", "enum": ["env", "file", "exec", "store"] },
+          "provider": { "type": "string" },
+          "id": { "type": "string" }
+        },
+        "required": ["source", "provider", "id"]
+      }
+    },
     "properties": {
       "assistantName": { "type": "string" },
       "assistantDescription": { "type": "string" },
@@ -84,7 +101,7 @@
       "bufferSize": { "type": "integer", "minimum": 1, "maximum": 50 },
       "evaluateDirectMessages": { "type": "boolean" },
       "failOpen": { "type": "boolean" },
-      "apiKey": { "type": "string" },
+      "apiKey": { "anyOf": [{ "type": "string" }, { "$ref": "#/$defs/secretRef" }] },
       "baseUrl": { "type": "string" },
       "model": { "type": "string" },
       "timeoutMs": { "type": "integer", "minimum": 100 }

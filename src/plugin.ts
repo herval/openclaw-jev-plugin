@@ -46,6 +46,14 @@ export function registerJevGate(api: OpenClawPluginApi, deps: JevGateDependencie
   const assistants = createAssistantResolver(api, settings);
   const log = api.logger;
 
+  if (settings.unresolvedApiKeyRef) {
+    const { source, provider } = settings.unresolvedApiKeyRef;
+    log.warn(
+      `jev-gate: config.apiKey SecretRef (source=${source}, provider=${provider}) did not resolve; ` +
+        (settings.apiKey ? "falling back to TYPESAFE_API_KEY" : "check `openclaw secrets list` and the ref id"),
+    );
+  }
+
   let jev: JevClient | undefined = deps.jev;
   if (!jev) {
     if (settings.apiKey) {
@@ -57,7 +65,7 @@ export function registerJevGate(api: OpenClawPluginApi, deps: JevGateDependencie
       });
     } else {
       log.warn(
-        "jev-gate: no TypeSafe API key (set TYPESAFE_API_KEY or plugins.entries.jev-gate.config.apiKey); " +
+        "jev-gate: no TypeSafe API key (set TYPESAFE_API_KEY or plugins.entries.jev-gate.config.apiKey, a string or SecretRef); " +
           (settings.failOpen ? "every message will be answered" : "only mentions will be answered"),
       );
     }

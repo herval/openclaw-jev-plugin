@@ -1,21 +1,146 @@
 # openclaw-jev-gate
 
-An [OpenClaw](https://github.com/openclaw/openclaw) plugin that puts fast, typed judgments from
-[TypeSafe Jev](https://typesafe.ai) around the agent. Each feature has its own switch:
+An [OpenClaw](https://github.com/openclaw/openclaw) plugin that makes two decisions for your bot
+before the language model runs: **should it answer this message**, and **which model should
+answer it**. Both decisions come from [TypeSafe Jev](https://typesafe.ai), a model that returns
+probabilities instead of text, so each one takes a fraction of a second.
 
-| Feature | Default | What it does |
+## What it does
+
+### Reply gate (on by default)
+
+An OpenClaw bot in a group chat has two modes. With `requireMention: true` it answers only when
+someone names it. With `requireMention: false` it answers every message, including the ones
+people write to each other. The reply gate is the mode in between: the bot sees every message
+and answers the ones meant for it.
+
+| Message in a group chat | Without the gate | With the gate |
 | --- | --- | --- |
-| [Reply gate](#reply-gate) | on | Decides whether the bot answers an incoming group message. A mention always gets an answer. |
-| [Model router](#model-router) | off | Picks a model tier for each run from how much work the request takes and what is at stake. |
+| "@pato what broke the deploy?" | answers | answers (a mention always gets an answer) |
+| "and what about staging?" right after the bot replied | answers | answers (a follow-up to the bot) |
+| "anyone up for lunch?" | answers | stays silent |
+| "thanks Ana, that fixed it" | answers | stays silent |
 
-Both read one small buffer of the last few messages per conversation. Planned features are in
-[TODO.md](TODO.md).
+A silenced message never reaches the language model, so it costs one Jev call and no model
+tokens. Direct messages always get an answer unless you choose to gate them too.
 
-Status: prototype. Unit tests cover the decision logic. The reply gate runs against a live
-gateway. The model router's questions were checked against the live Jev API, but the router has
-not yet routed a run inside a gateway.
+### Model router (off by default)
 
-## Reply gate
+Most agents run one model for everything, so "thanks!" costs the same as "find the race
+condition in this service". The router asks Jev how much work a request takes and whether a wrong
+answer has consequences, then picks one of three models you configure:
+
+| Request | Tier |
+| --- | --- |
+| "lol", "thanks, that worked", "what's the default Postgres port?" | **light** |
+| "write a function that dedupes these users by email" | **standard** |
+| "find the race, propose a fix with trade-offs, write the migration plan" | **heavy** |
+| "what's the exact command to drop the production users table?" | **heavy**, because of the stakes |
+
+When Jev is unsure, the request goes to **standard**, never to **light**. A tier you leave empty
+keeps the agent's own model, so you only name the tiers you want to change. With no tiers set
+the router only logs what it would have done.
+
+More features are planned in [TODO.md](TODO.md). Each feature has its own `enabled` switch.
+
+## What it sends to TypeSafe
+
+The plugin sends chat content to `api.typesafe.ai`. Know what that covers before you enable it:
+
+- **Reply gate:** the text of each group message, plus the last few messages of that conversation
+  (8 by default, each cut to 400 characters) and the assistant's name and description. Direct
+  messages are not sent unless `replyGate.evaluateDirectMessages` is on.
+- **Model router:** the last 4000 characters of the prompt for every run a person triggered, in
+  group chats and direct messages alike. The prompt can include history that OpenClaw adds.
+  Because the router reads prompts, OpenClaw requires an explicit permission for it (see
+  [Setup](#setup), step 5).
+
+Nothing is sent for cron, heartbeat, memory or overflow runs. The API key is never logged.
+
+If Jev is unreachable, slow or returns an error, the bot behaves as if the plugin were not
+installed: the gate lets the message through (`replyGate.failOpen`), and the router keeps the
+agent's model.
+
+## Status
+
+Prototype. The reply gate runs on a live gateway. The model router loads on a live gateway, and
+its questions were checked against the live Jev API with nine prompts, but it has not yet routed
+a real run. Unit tests cover the decision rules for both.
+
+## Setup
+
+1. **Install.** From a checkout of this repository:
+
+   ```bash
+   make setup
+   make dev      # openclaw plugins install --link <this directory>, then enable
+   ```
+
+   A linked install loads the TypeScript source directly. OpenClaw's install scan stops at
+   10,000 directories, so keep large checkouts out of this folder.
+
+2. **Give it a TypeSafe API key.** Store the key in OpenClaw's secret store and point
+   `config.apiKey` at it with a SecretRef. The gateway resolves the ref before the plugin loads,
+   so the key never sits in `openclaw.json` and does not depend on the gateway's shell
+   environment (a launchd service does not read `~/.zshrc`):
+
+   ```bash
+   openclaw config set plugins.entries.jev-gate.config.apiKey \
+     '{"source":"store","provider":"default","id":"TYPESAFE_API_KEY"}' --json
+   ```
+
+   `config.apiKey` also accepts a plain string. With no `config.apiKey`, or a SecretRef that
+   fails to resolve, the plugin falls back to `TYPESAFE_API_KEY` in the gateway environment. A
+   failed ref logs a warning with its source and provider, never the value.
+
+3. **Configure it** in `openclaw.json`. Only the description is worth setting for the gate:
+
+   ```json5
+   {
+     plugins: {
+       entries: {
+         "jev-gate": {
+           enabled: true,
+           config: {
+             assistantDescription: "The team's engineering helper. Answers questions about the monorepo and deploys.",
+             replyGate: { enabled: true },
+             modelRouter: {
+               enabled: true,
+               tiers: { light: "anthropic/claude-sonnet-4-6", standard: "anthropic/claude-sonnet-5" },
+             },
+           },
+         },
+       },
+     },
+   }
+   ```
+
+   Use model ids your gateway knows. `openclaw models list --all` prints them. An id the gateway
+   cannot resolve would make every run on that tier fail.
+
+4. **Let the gate see group messages.** Set `requireMention: false` on the group channels you
+   want gated. With `requireMention: true`, OpenClaw drops unmentioned messages before they
+   reach the plugin.
+
+5. **Allow the router to read prompts.** Only needed when `modelRouter.enabled` is true. OpenClaw
+   blocks the router's hook for any plugin it does not ship until you grant this:
+
+   ```bash
+   openclaw config set plugins.entries.jev-gate.hooks.allowConversationAccess true --json
+   ```
+
+   Without it the gateway logs `typed hook "before_model_resolve" blocked` and the router does
+   nothing. The reply gate does not need this permission.
+
+6. **Restart and check.** Run `openclaw gateway restart`, then look in the gateway log for:
+
+   ```
+   jev-gate: replyGate on, modelRouter on
+   jev-gate: silent for <session> (addressed=0.05 wanted=0.20 audience=whole_group(0.99) threshold=0.6)
+   jev-gate: route light -> anthropic/claude-sonnet-4-6 for <session> (effort=0.00(1.00) stakes=0.12)
+   ```
+
+## How the reply gate decides
 
 1. OpenClaw runs the `before_dispatch` hook for every inbound message before the model runs.
 2. The plugin appends the message to a per-conversation ring buffer (default 8 messages).
@@ -27,9 +152,9 @@ not yet routed a run inside a gateway.
    - `addressedToAssistant` (yes/no): is the message for the assistant, or a follow-up to it?
    - `wantsAssistantReply` (yes/no): would the chat expect the assistant to answer now?
    - `audience` (choice): assistant, another person, the whole group, or nobody.
-5. If `max(addressedToAssistant, wantsAssistantReply) >= replyGate.threshold` (default 0.6) the message
-   continues to the model. Otherwise the hook returns `{ handled: true }` with no text, which
-   ends the message silently.
+5. If `max(addressedToAssistant, wantsAssistantReply) >= replyGate.threshold` (default 0.6) the
+   message continues to the model. Otherwise the hook returns `{ handled: true }` with no text,
+   which ends the message silently.
 6. The bot's own replies arrive through `message_sent` and are added to the buffer, so the next
    evaluation sees the exchange. Silenced messages stay in the buffer too, tagged
    `assistantAction: stayed_silent`, so Jev knows the bot has been quiet.
@@ -37,52 +162,33 @@ not yet routed a run inside a gateway.
 Jev returns calibrated probabilities instead of text, answers in well under a second, and does
 not bill output tokens, so the gate is cheap enough to run on every group message.
 
-## Install (local link)
+## How the model router decides
 
-```bash
-make setup
-make dev      # openclaw plugins install --link ... && enable
-```
+1. OpenClaw runs the `before_model_resolve` hook once per agent run, before it picks a model.
+2. The plugin sends Jev the end of the prompt (the current message sits last), the earlier
+   messages from the buffer, and the kinds of any attachments, with two questions:
+   - `effort` (score, 4 levels): from small talk, through a simple lookup and a task with a few
+     steps, to a hard multi-step problem. Normalized to 0 to 1.
+   - `highStakes` (yes/no): does a wrong answer carry real consequences?
+3. Code maps the answers to a tier:
+   - **heavy** when effort is at or above `heavyAbove`, or when stakes are high (0.7 or more) and
+     the request is more than trivial.
+   - **light** only when effort is at or below `lightBelow`, stakes are low (under 0.5), Jev's
+     confidence in the effort score is at least `minConfidence`, and nothing is attached.
+   - **standard** for everything else, which includes every uncertain case.
+4. The tier's model is returned as the override. A tier with no model configured leaves the
+   agent's own model in place.
 
-Then in `openclaw.json`:
+Tier values are model references as OpenClaw writes them: `provider/model`, split on the first
+slash, or a bare model id. If your agent already runs the expensive model, set `light` and
+`standard` and leave `heavy` empty, so the router only ever moves a request to a cheaper model.
 
-```json5
-{
-  plugins: {
-    entries: {
-      "jev-gate": {
-        enabled: true,
-        config: {
-          assistantDescription: "The team's engineering helper. Answers questions about the monorepo and deploys.",
-          replyGate: { enabled: true, threshold: 0.6 },
-          modelRouter: {
-            enabled: true,
-            tiers: { light: "anthropic/claude-haiku-4-5", standard: "anthropic/claude-sonnet-5" },
-          },
-        },
-      },
-    },
-  },
-}
-```
+The router only looks at runs a person triggered. The host skips the hook when the model is
+locked (for example with `/model`) and catches hook errors, so a Jev failure or timeout leaves
+the agent's model in place.
 
-Store the TypeSafe key in OpenClaw's secret store and point `config.apiKey` at it with a
-SecretRef. The gateway resolves the ref before the plugin loads, so the key never sits in
-`openclaw.json` and does not depend on the gateway's shell environment (launchd does not read
-`~/.zshrc`):
-
-```bash
-openclaw config set plugins.entries.jev-gate.config.apiKey \
-  '{"source":"store","provider":"default","id":"TYPESAFE_API_KEY"}' --json
-```
-
-`config.apiKey` also accepts a plain string. With no `config.apiKey`, or a SecretRef that fails
-to resolve, the plugin falls back to `TYPESAFE_API_KEY` in the gateway environment. A failed ref
-logs a warning with its source and provider, never the value.
-
-The gate only matters for group channels where OpenClaw delivers every message. Keep the
-channel's `requireMention: false` for the groups you want gated. Channels that already run
-with `requireMention: true` never reach the gate for unmentioned messages.
+Each decision is one Jev call of roughly 250 to 650 ms. The default thresholds come from a
+nine-prompt check against the live API. Tune them on your own traffic.
 
 ## Name and mentions
 
@@ -100,39 +206,6 @@ to repeat in the plugin config.
 `assistantName` and `replyGate.mentionPatterns` in the plugin config remain as overrides. Set
 `assistantName` when Jev should see a different name than the host identity. Set
 `replyGate.mentionPatterns` to add patterns that only the gate should treat as a mention.
-
-## Model router
-
-Off by default. Turn it on with `modelRouter.enabled: true`.
-
-1. OpenClaw runs the `before_model_resolve` hook once per agent run, before it picks a model.
-2. The plugin sends Jev the end of the prompt (the current message sits last), the earlier
-   messages from the buffer, and the kinds of any attachments, with two questions:
-   - `effort` (score, 4 levels): from small talk, through a simple lookup and a task with a few
-     steps, to a hard multi-step problem. Normalized to 0 to 1.
-   - `highStakes` (yes/no): does a wrong answer carry real consequences?
-3. Code maps the answers to a tier:
-   - **heavy** when effort is at or above `heavyAbove`, or when stakes are high (0.7 or more) and
-     the request is more than trivial.
-   - **light** only when effort is at or below `lightBelow`, stakes are low (under 0.5), Jev's
-     confidence in the effort score is at least `minConfidence`, and nothing is attached.
-   - **standard** for everything else, which includes every uncertain case.
-4. The tier's model is returned as the override. A tier with no model configured leaves the
-   agent's own model in place, so you only name the tiers you want to change.
-
-Tier values are model references as OpenClaw writes them: `provider/model`, split on the first
-slash, or a bare model id. If your agent already runs the expensive model, set `light` and
-`standard` and leave `heavy` empty. With no tiers set at all the router only logs its decisions,
-which is a safe way to watch it before it changes anything.
-
-The router only looks at runs a person triggered. Cron, heartbeat, memory and overflow runs keep
-the agent's model. The host skips the hook when the model is locked (for example with `/model`)
-and catches hook errors, so a Jev failure or timeout leaves the agent's model in place.
-
-Each decision is one Jev call of roughly 250 to 650 ms, logged as
-`jev-gate: route light -> anthropic/claude-haiku-4-5 for <session> (effort=0.00(1.00) stakes=0.12)`.
-The default thresholds come from a nine-prompt check against the live API. Tune them on your own
-traffic.
 
 ## Configuration
 

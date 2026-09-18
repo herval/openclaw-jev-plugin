@@ -12,8 +12,9 @@ against a live gateway yet.
 
 1. OpenClaw runs the `before_dispatch` hook for every inbound message before the model runs.
 2. The plugin appends the message to a per-conversation ring buffer (default 8 messages).
-3. Direct messages pass through. A mention of the assistant name or any configured pattern
-   passes through.
+3. Direct messages pass through. A mention passes through. Mentions are matched with
+   OpenClaw's own patterns for the agent that owns the session (see
+   [Name and mentions](#name-and-mentions)), plus any extra patterns from the plugin config.
 4. For everything else the plugin sends the buffer and the new message to Jev's
    `POST /v1/systemone` with three typed questions:
    - `addressedToAssistant` (yes/no): is the message for the assistant, or a follow-up to it?
@@ -45,9 +46,7 @@ Then in `openclaw.json`:
       "jev-gate": {
         enabled: true,
         config: {
-          assistantName: "pato",
           assistantDescription: "The team's engineering helper. Answers questions about the monorepo and deploys.",
-          mentionPatterns: ["@pato", "/\\bduck\\b/"],
           threshold: 0.6,
           bufferSize: 8,
         },
@@ -64,13 +63,30 @@ The gate only matters for group channels where OpenClaw delivers every message. 
 channel's `requireMention: false` for the groups you want gated. Channels that already run
 with `requireMention: true` never reach the gate for unmentioned messages.
 
+## Name and mentions
+
+The plugin reads the assistant's name and mention patterns from OpenClaw, so there is nothing
+to repeat in the plugin config.
+
+- The agent is taken from the session key (`agent:<id>:...`). A key without an agent falls
+  back to the default agent. Two agents on one gateway each get their own name.
+- The name is that agent's `identity.name`. With no identity it is `assistant`.
+- Mentions use the host's `buildMentionRegexes`, which resolves patterns in this order: the
+  agent's `groupChat.mentionPatterns`, then `messages.groupChat.mentionPatterns`, then
+  patterns derived from `identity.name` and `identity.emoji`. The channel's `mentionPatterns`
+  allow/deny policy applies too.
+
+`assistantName` and `mentionPatterns` in the plugin config remain as overrides. Set
+`assistantName` when Jev should see a different name than the host identity. Set
+`mentionPatterns` to add patterns that only the gate should treat as a mention.
+
 ## Configuration
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `assistantName` | `assistant` | Name used for mention detection and shown to Jev. |
+| `assistantName` | agent `identity.name` | Overrides the name shown to Jev. Also counts as a mention. |
 | `assistantDescription` | generic | What the assistant is for. Jev uses it to judge relevance. |
-| `mentionPatterns` | `[]` | Extra names or `/regex/i` strings that count as a mention. |
+| `mentionPatterns` | `[]` | Extra names or `/regex/i` strings that count as a mention, on top of the host's patterns. |
 | `threshold` | `0.6` | Reply when Jev's probability is at or above this value. |
 | `bufferSize` | `8` | Messages kept per conversation. |
 | `evaluateDirectMessages` | `false` | Gate direct messages too. |
@@ -103,7 +119,8 @@ openclaw.plugin.json     manifest: config schema and UI hints
 src/plugin.ts            hook wiring: before_dispatch, message_sent
 src/decide.ts            Jev state, questions, decision rule
 src/buffer.ts            per-conversation ring buffer
-src/mention.ts           mention patterns
+src/identity.ts          agent, name and mention resolution from the host
+src/mention.ts           extra mention patterns from the plugin config
 src/jev-client.ts        HTTP client for Jev
 src/config.ts            settings resolution
 ```

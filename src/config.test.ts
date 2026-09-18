@@ -9,6 +9,7 @@ describe("resolveSettings", () => {
       TYPESAFE_DEFAULT_MODEL: "jev-2",
     });
     expect(settings).toEqual({ ...DEFAULT_SETTINGS, apiKey: "key", baseUrl: "https://proxy.test", model: "jev-2" });
+    expect(settings.assistantName).toBeUndefined();
   });
 
   it("prefers plugin config and clamps numbers", () => {

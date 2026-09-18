@@ -28,7 +28,8 @@ The decision order is fixed:
 
 1. Append the message to a per-conversation ring buffer keyed by `sessionKey`.
 2. A direct message passes. This is configurable.
-3. A mention passes. The matcher accepts the assistant name and extra patterns from config. A
+3. A mention passes. The agent is resolved from the session key, and the text is matched with
+   the host's mention patterns for that agent plus extra patterns from the plugin config. A
    quoted reply to a message from the assistant also counts.
 4. Otherwise ask Jev with the buffer as state and three questions: `addressedToAssistant`,
    `wantsAssistantReply`, and `audience`. Reply when the larger of the two probabilities is at
@@ -53,7 +54,13 @@ Alternatives rejected:
   sets `autoInstallPeers: false`.
 
 The `before_dispatch` event does not carry `WasMentioned`. OpenClaw passes that flag only to
-`inbound_claim`. The plugin therefore runs its own mention matcher.
+`inbound_claim`. The plugin therefore matches mentions itself, but with the host's patterns:
+`api.runtime.channel.mentions.buildMentionRegexes(api.config, agentId)`. The assistant name
+comes from `api.runtime.agent.resolveAgentIdentity`. Neither the event nor the context carries
+an `agentId`, so the plugin parses it from the session key (`agent:<id>:...`) and falls back
+to the default agent. Resolution runs per message because one gateway can host several agents
+with different names. `assistantName` and `mentionPatterns` in the plugin config are optional
+overrides on top of the host values.
 
 ## Files Modified
 
@@ -63,7 +70,8 @@ The `before_dispatch` event does not carry `WasMentioned`. OpenClaw passes that 
 - `src/plugin.ts` — hook wiring and decision order.
 - `src/decide.ts` — Jev state, the three questions, the threshold rule.
 - `src/buffer.ts` — per-conversation ring buffer with LRU eviction.
-- `src/mention.ts` — mention patterns.
+- `src/identity.ts` — agent id, name and mention resolution from the host config and runtime.
+- `src/mention.ts` — extra mention patterns from the plugin config.
 - `src/jev-client.ts` — client for `POST /v1/systemone`.
 - `src/config.ts` — settings from plugin config and environment.
 - `src/types/openclaw-plugin-sdk.d.ts` — ambient types for the SDK subset.

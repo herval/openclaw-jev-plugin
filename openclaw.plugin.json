@@ -8,8 +8,8 @@
   },
   "uiHints": {
     "assistantName": {
-      "label": "Assistant name",
-      "help": "How people call the assistant in chat. Used for mention detection and passed to Jev."
+      "label": "Assistant name override",
+      "help": "Leave empty to use the agent's identity.name from the OpenClaw config. Set it to show Jev a different name. The override also counts as a mention."
     },
     "assistantDescription": {
       "label": "Assistant description",
@@ -17,7 +17,7 @@
     },
     "mentionPatterns": {
       "label": "Mention patterns",
-      "help": "Extra names or /regex/i patterns that count as a mention. A mention always gets an answer."
+      "help": "Extra names or /regex/i patterns that count as a mention, on top of OpenClaw's own mention patterns. A mention always gets an answer."
     },
     "threshold": {
       "label": "Reply threshold",

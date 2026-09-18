@@ -11,8 +11,8 @@ import type {
 import { createConversationBuffer, type ConversationBuffer } from "./buffer.js";
 import { resolveSettings, type JevGateSettings } from "./config.js";
 import { decideWithJev } from "./decide.js";
+import { createAssistantResolver } from "./identity.js";
 import { createJevClient, type JevClient } from "./jev-client.js";
-import { createMentionMatcher } from "./mention.js";
 
 export type JevGateDependencies = {
   jev?: JevClient;
@@ -43,7 +43,7 @@ export function registerJevGate(api: OpenClawPluginApi, deps: JevGateDependencie
   const settings = deps.settings ?? resolveSettings(api.pluginConfig);
   const now = deps.now ?? (() => Date.now());
   const buffer = createConversationBuffer({ size: settings.bufferSize });
-  const mention = createMentionMatcher([settings.assistantName, ...settings.mentionPatterns]);
+  const assistants = createAssistantResolver(api, settings);
   const log = api.logger;
 
   let jev: JevClient | undefined = deps.jev;
@@ -79,7 +79,11 @@ export function registerJevGate(api: OpenClawPluginApi, deps: JevGateDependencie
       return undefined;
     }
 
-    if (mention.matches(text) || mention.matches(event.replyToSender)) {
+    const assistant = assistants.resolve(event.sessionKey ?? ctx.sessionKey, {
+      channel: ctx.channelId ?? event.channel,
+      conversationId: ctx.conversationId,
+    });
+    if (assistant.mentions(text) || assistant.mentions(event.replyToSender)) {
       buffer.markLast(key, "mentioned");
       log.debug?.(`jev-gate: mention in ${key}, replying`);
       return undefined;
@@ -94,7 +98,7 @@ export function registerJevGate(api: OpenClawPluginApi, deps: JevGateDependencie
       const decision = await decideWithJev(
         jev,
         {
-          assistantName: settings.assistantName,
+          assistantName: assistant.name,
           assistantDescription: settings.assistantDescription,
           channel: ctx.channelId ?? event.channel,
           isGroup: event.isGroup ?? true,
@@ -124,7 +128,7 @@ export function registerJevGate(api: OpenClawPluginApi, deps: JevGateDependencie
     }
     buffer.append(event.sessionKey, {
       role: "assistant",
-      sender: settings.assistantName,
+      sender: assistants.resolve(event.sessionKey).name,
       text,
       timestamp: now(),
     });

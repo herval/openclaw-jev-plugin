@@ -2,7 +2,8 @@
  * Minimal ambient typing for the OpenClaw plugin SDK surface this plugin uses.
  *
  * The real types live in the `openclaw` host package (src/plugins/hook-types.ts,
- * hook-message.types.ts, plugin-api.types.ts, logger-types.ts). The host aliases
+ * hook-message.types.ts, plugin-api.types.ts, runtime/types-core.ts,
+ * runtime/types-channel.ts, logger-types.ts). The host aliases
  * `openclaw/plugin-sdk/*` at load time, so the package is a peer dependency and is
  * not installed here. Keep this file in sync with the fields the plugin reads.
  */
@@ -88,10 +89,48 @@ declare module "openclaw/plugin-sdk/plugin-entry" {
     timeoutMs?: number;
   };
 
+  export type IdentityConfig = {
+    name?: string;
+    theme?: string;
+    emoji?: string;
+    avatar?: string;
+  };
+
+  /** Host config. Only the agent roster is typed; the rest is opaque to this plugin. */
+  export type OpenClawConfig = {
+    agents?: {
+      list?: Array<{ id: string; default?: boolean; identity?: IdentityConfig }>;
+    };
+    [key: string]: unknown;
+  };
+
+  export type BuildMentionRegexesOptions = {
+    provider?: string;
+    conversationId?: string | null;
+  };
+
+  export type PluginRuntime = {
+    agent: {
+      resolveAgentIdentity: (cfg: OpenClawConfig, agentId: string) => IdentityConfig | undefined;
+    };
+    channel: {
+      mentions: {
+        buildMentionRegexes: (
+          cfg: OpenClawConfig | undefined,
+          agentId?: string,
+          options?: BuildMentionRegexesOptions,
+        ) => RegExp[];
+        matchesMentionPatterns: (text: string, mentionRegexes: RegExp[]) => boolean;
+      };
+    };
+  };
+
   export type OpenClawPluginApi = {
     id: string;
     name: string;
+    config: OpenClawConfig;
     pluginConfig?: Record<string, unknown>;
+    runtime: PluginRuntime;
     logger: PluginLogger;
     on: <K extends PluginHookName>(
       hookName: K,

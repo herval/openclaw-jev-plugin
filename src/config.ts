@@ -1,6 +1,7 @@
 /** Resolved plugin settings. Config values win over environment variables, then defaults. */
 export type JevGateSettings = {
-  assistantName: string;
+  /** Overrides the agent's `identity.name` from the host config. Unset by default. */
+  assistantName: string | undefined;
   assistantDescription: string;
   mentionPatterns: string[];
   threshold: number;
@@ -14,7 +15,7 @@ export type JevGateSettings = {
 };
 
 export const DEFAULT_SETTINGS: Omit<JevGateSettings, "apiKey"> = {
-  assistantName: "assistant",
+  assistantName: undefined,
   assistantDescription:
     "A helpful assistant that takes part in this chat. It answers questions and requests directed at it.",
   mentionPatterns: [],
@@ -62,7 +63,7 @@ export function resolveSettings(
 ): JevGateSettings {
   const cfg = pluginConfig ?? {};
   return {
-    assistantName: readString(cfg.assistantName) ?? DEFAULT_SETTINGS.assistantName,
+    assistantName: readString(cfg.assistantName),
     assistantDescription:
       readString(cfg.assistantDescription) ?? DEFAULT_SETTINGS.assistantDescription,
     mentionPatterns: readStringList(cfg.mentionPatterns) ?? DEFAULT_SETTINGS.mentionPatterns,
